@@ -42,7 +42,7 @@ class CarInterface(CarInterfaceBase):
       ret.longitudinalActuatorDelay = 0.36  # measured ~0.3 s dead time + ~0.3 s first-order lag
 
     # Older EPS firmware enforces hands-off and low-speed steering lockouts.
-    ret.dashcamOnly = candidate not in (CAR.MAZDA_CX5_2022, CAR.MAZDA_CX9_2021) and not steer_to_zero
+    ret.dashcamOnly = candidate not in (CAR.MAZDA_CX5_2022, CAR.MAZDA_CX9_2021, CAR.MAZDA_6) and not steer_to_zero
 
     ret.enableBsm = 0x477 in fingerprint[0]
 
