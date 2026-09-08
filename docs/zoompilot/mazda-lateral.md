@@ -298,6 +298,33 @@ reference reset, against the EPS's 60 frames; the same scenario starves the EPS 
 the run without the report. Measurements, the state table for byte 6 and the
 open items: [mazda-camera-fault-2026-09-06.md](mazda-camera-fault-2026-09-06.md).
 
+## Stock TJA/CTS steering alongside openpilot
+
+A CTS-enabled CX-5 2022 on stock longitudinal (route `0000007b--9b17f2dc01`, 2026-09-05) drove
+with the camera's own lane centering engaged the whole time openpilot held lateral: 0x440 `TJA`
+read 4, and the camera's 0x243 carried a torque request on 955 of 959 frames in seg 2 (up to
+251 counts; 358 in seg 5), at 65 to 70 mph with MRCC engaged. The panda drops the camera's
+0x243 while openpilot controls, the EPS follows ours and echoes ours back in STEER_RATE, so the
+camera never sees its command executed. The owner reported the cluster's "Front Camera Sensor
+System Malfunction" ten to fifteen times in nine minutes. Everything else on that drive is clean:
+no rejection, no 0x243 gap, no `ERR_BIT`, no `LKAS_FAULT`, the panda's CAN counters healthy,
+forwarding complete in both directions, our 0x243 and 0x440 byte-identical to the camera's
+outside the request, counter, checksum and the TJA field we zero. No car in our own corpus has
+the camera requesting torque while openpilot steers (TJA 0 throughout); the one stock-CTS
+capture (`tja_cts_route_29`, CX-9) had openpilot passive.
+
+The camera's TJA state is 0 until the driver presses the TJA button, 2 when on and idle, 3 or 4
+while it steers (route 29 and this one). `carstate.py` raises `stockLkas` after a second of the
+camera requesting torque with TJA nonzero, holding a second through zero crossings; the Mazda
+hook in `car_specific.py` swaps upstream's lane-departure alert for `mazdaStockCtsActive`: a
+permanent "Stock CTS Is Steering / Press the TJA button to hand it to openpilot" banner plus
+NO_ENTRY. Replayed through the real carstate it is up for 91 % of seg 2 and 69 % of seg 5, never
+on our cars, and on the CX-9's stock-CTS stretches. The link from the blocked command to the
+cluster warning is the hypothesis this alert exists to test; the owner pressing the TJA button
+(cluster CTS icon off) and the warnings stopping would confirm it. Under alpha long the camera
+sees our synthetic MRCC as engaged, so a TJA-capable car would reach the same state if the
+driver pressed the button.
+
 ## TJA button as the MADS switch
 
 Some gen1 trims carry a physical TJA button on the wheel, CRZ_BTNS bit 11 (byte 1, bit 3).

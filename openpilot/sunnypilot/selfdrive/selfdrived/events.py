@@ -203,6 +203,15 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.steerRequired, AudibleAlert.prompt, .5),
   },
 
+  # The stock camera's TJA/CTS is on and steering while openpilot controls lateral. The panda
+  # drops its 0x243 and the EPS follows ours, so the camera never sees its command executed and
+  # raises the cluster's camera malfunction warning (Mazda route 0000007b--9b17f2dc01). One
+  # press of the TJA button turns the stock system off; openpilot keeps steering meanwhile.
+  EventNameSP.mazdaStockCtsActive: {
+    ET.PERMANENT: NormalPermanentAlert("Stock CTS Is Steering", "Press the TJA button to hand it to openpilot"),
+    ET.NO_ENTRY: NoEntryAlert("Stock CTS Is On"),
+  },
+
   EventNameSP.experimentalModeSwitched: {
     ET.WARNING: NormalPermanentAlert("Experimental Mode Switched", duration=1.5)
   },
