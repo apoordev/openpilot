@@ -57,11 +57,5 @@ class CarSpecificEventsSP:
         # shouts at the driver. Keep the banner, drop the escalation.
         events.remove(EventName.steerTempUnavailable)
         events.add(EventName.steerTempUnavailableSilent)
-      if CS.stockLkas:
-        # carstate raises stockLkas for the camera's TJA/CTS steering alongside openpilot.
-        # Upstream's alert names a lane-departure nudge; this one names the button that
-        # ends the conflict, and stays up until it is pressed.
-        events.remove(EventName.stockLkas)
-        events_sp.add(EventNameSP.mazdaStockCtsActive)
 
     return events_sp

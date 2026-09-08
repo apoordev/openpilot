@@ -364,7 +364,6 @@ struct OnroadEventSP @0xda96579883444c35 {
     bigModelReady @25;
     controlsMismatchLateralWarning @26;
     silentPedalPressed @27;
-    mazdaStockCtsActive @28;
   }
 }
 
