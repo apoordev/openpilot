@@ -32,5 +32,6 @@ jobs:
       - uses: actions/checkout@v7
       - run: ./tools/op.sh setup
       - name: Mazda car and safety tests
-        # libsafety is compiled by cffi at import; nothing else here needs the scons tree
-        run: uv run pytest -q opendbc_repo/opendbc/car/mazda/tests opendbc_repo/opendbc/safety/tests/test_mazda.py
+        # pytest is not a declared dependency (upstream's runner is unittest), so it rides in
+        # ephemerally; libsafety is compiled by cffi at import, nothing needs the scons tree
+        run: uv run --with pytest pytest -q opendbc_repo/opendbc/car/mazda/tests opendbc_repo/opendbc/safety/tests/test_mazda.py
