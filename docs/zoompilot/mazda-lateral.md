@@ -333,7 +333,7 @@ sub-state of MRCC armed. On tja_cts_route_29 a press is 2 or 3 wire frames with 
 camera's 0x440 `TJA` changing 21 ms after the FIRST set frame, from any state: it acts on the
 press edge and toggles.
 
-### Plan: the TJA button as the MADS switch, second attempt
+### The TJA button as the MADS switch, second attempt (built 2026-09-09, on-car pending)
 
 The first attempt (2026-09-03 to 09-08) failed because every press also toggled the camera, so
 MADS and the camera's TJA were in phase or out of phase by luck. The fix is to own the camera's
@@ -349,43 +349,45 @@ one meaning, it alternates the two lane-centering systems:
 MRCC becoming armed on the first press is the button's stock behaviour and is left alone. It is
 armed, not engaged; SET still has to be pressed. No MRCC-off spoof on bus 0.
 
-**1. Declaration (restore 10c7367925 + d2242a1365 in main, caf74ae8bb + 68bf13d185 in opendbc,
-minus the MRCC-main guard).** `MazdaTjaButton` toggle, `MazdaFlagsSP.TJA_BUTTON`, the safety
-param bit, `mazda_tja_button` driving `mads_button_press` from bit 11, `button_owns_lateral` in
-mads.py, carstate's lkas button event. Keep `acc_main_on` following MRCC even when declared: with
-`allow_always` and `no_main_cruise` set in software the main edge no longer engages or disengages
-lateral, and the panda's own main-edge engagement is what the 08-27 desync fix already gates.
-Non-declared cars must stay byte-identical (re-run the mads.py A/B trace from 09-03).
-
-**2. Camera press on bus 2 (new).** Carstate: `stock_tja = int(cam_laneinfo["TJA"])` from the
-already-parsed 0x440, live, never latched (the camera drops its own arm, seg 9 +470 ms).
-Carcontroller: when `latActive` and `stock_tja != 0`, send ONE CRZ_BTNS on bus 2 with
-`TJA_BUTTON` set, `CTR = crz_btns_counter + 1`, every other byte the stock idle pattern
-(`00 09 ff Cx 00 00 00 00`), via `create_button_cmd(bus=2, tja=True)`. The forwarded real stream
-supplies the release. Wait at least 1 s between presses (0x440 period 0.563 s plus parser
-latency); cap at three per arming episode, reset when the field reads 0, so a driver re-arming
-it under us is handled again. Not gated on the declaration: any Mazda that ends up steering with
-the camera armed (route 7b, feature off) gets the same press.
+**1. Camera press on bus 2** (`CarController.update_camera_tja`, opendbc b697d69be6). Carstate
+reads `stock_tja` live off the parsed 0x440 (0 when the camera is stale, never latched: the
+camera drops its own arm, seg 9 +470 ms). When `latActive` and `stock_tja != 0`, ONE CRZ_BTNS
+on bus 2 with `TJA_BUTTON` set, `CTR = crz_btns_counter + 1`, every other byte the wheel's idle
+pattern (`00 09 ff Cx 00 00 00 00`), `create_button_cmd(bus=2, Buttons.TJA)`. The forwarded
+real stream supplies the release. `TJA_PRESS_INTERVAL_T` 1 s between presses (0x440 period
+0.563 s plus parser latency), `TJA_PRESS_MAX` 3 per arming episode, reset when the field reads
+0, so a driver re-arming it under us is handled again. Not gated on the declaration: any Mazda
+that ends up steering with the camera armed (route 7b, feature off) gets the same press.
 Panda: `{MAZDA_CRZ_BTNS, MAZDA_CAM, 8, .check_relay = false}` in both TX lists (skipped by the
-relay watchdog and static blocking, so the wheel's 0x09d keeps forwarding); tx hook accepts the
-bus-2 frame only while `mazda_openpilot_controlling()` and byte-exact (bit 11 plus the idle
-pattern, no other button); bit 11 on bus 0 is refused outright. Fwd hook untouched.
+relay watchdog and static blocking, so the wheel's 0x09d keeps forwarding); the tx hook accepts
+the bus-2 frame only while `mazda_openpilot_controlling()` and byte-exact
+(`mazda_cam_tja_press_msg_valid`: bit 11 plus the idle pattern, any counter, no other button);
+bit 11 on bus 0 is refused outright. Fwd hook untouched.
 
-**3. If the camera does not clear.** After the third press with `stock_tja` still nonzero: keep
-steering (the panda blocks the camera, actuation is safe), raise `mazdaStockCtsActive` as a
-one-shot warning per arming episode, and log. The reverted 6f7a570eeb alert body is the starting
-point; it fires only on this failure, never on a healthy engagement, which was the 09-08
-objection.
+**2. If the camera does not clear.** One interval after the third press with `stock_tja` still
+nonzero: keep steering (the panda blocks the camera, actuation is safe) and set
+`CS.stock_cts_stuck` once per episode. Carstate consumes it into a `STOCK_CTS_ALERT_T` (0.1 s)
+`stockLkas` pulse and the Mazda hook in `car_specific.py` swaps upstream's no-entry for
+`mazdaStockCtsActive`, a 4 s WARNING ("Stock CTS Is Still On / Press the TJA button to switch
+it off"), no NO_ENTRY, no disable. It fires only on this failure, never on a healthy
+engagement, which was the 09-08 objection to the permanent banner.
 
-**4. White HUD (the icon).** When MADS lateral is active and the camera reads TJA 0 (we own the
-state), pack `TJA = 2` in our 0x440 so the cluster draws the white wheel; 0 otherwise. One field
-in `create_alert_command`, no payload allowlist: we already re-pack the camera's parsed fields
-and the packer zeroes what we do not name. TJA 3, 4 and 5 are never packed (active states; the
-body's hands-on monitoring keys on them, unverified). Gate: `mads.active`, `stock_tja == 0`,
-`visualAlert == none`. Bench prerequisite: the body consumes this field (chinna244's finding),
-so confirm with the panda controlling, MRCC off and our 0x440 carrying TJA 2 that MRCC does not
-arm, no chime, no CRZ_CTRL bit changes. If it arms MRCC, drop the icon; the feature does not
-depend on it.
+**3. Declaration** (restored: main 10c7367925 + d2242a1365 via the revert of 43223ce41b,
+opendbc caf74ae8bb + 68bf13d185 by hand). `MazdaTjaButton` toggle, `MazdaFlagsSP.TJA_BUTTON`,
+the safety param bit, `mazda_tja_button` driving `mads_button_press` from bit 11,
+`button_owns_lateral` in mads.py (`allow_always`, `no_main_cruise`, UEM blocked), carstate's
+lkas button event. The MRCC-main guard is KEPT in the panda, against the earlier draft of this
+plan: `acc_main_on` is never written when declared. The panda's MADS
+(`mads.h m_update_control_state`) exits lateral on the acc_main falling edge unconditionally,
+so with MRCC still on the main edge the MRCC master button would kill the panda's lateral while
+the software's MADS stayed on (a controls mismatch, our torque refused), and the table's third
+row would be false. Undeclared cars stay byte-identical (`TestMazdaTjaMads`, the mads.py A/B
+tests).
+
+**4. White HUD.** Not built (2026-09-09 decision). Our 0x440 keeps TJA 0. If revisited: pack
+`TJA = 2` under `mads.enabled`, `stock_tja == 0`, no visual alert, never 3 to 5, and bench
+first that TJA 2 from us with MRCC off does not arm MRCC (chinna244's finding that the body
+consumes the field).
 
 **5. Handover checks on the car.** MADS off by the button with cruise engaged at speed: our
 0x243 is vetoed the frame lateral falls and the camera's flows; measure the EPS echo across the
@@ -395,16 +397,20 @@ up to 1 s of blocked camera requests before the press lands; nothing reaches the
 **Order of work.** Bench on the CX-9 (engine running, panda controlling): (a) one bus-2 frame
 flips 0x440 `TJA`, wheel-side counter untouched; (b) the duplicated counter (ours at n+1, the
 next real frame at n+1) is accepted, else two frames 30 to 70 ms apart at n+1, n+2; (c) toggling
-active CTS at speed shows nothing on the cluster; (d) TJA 2 in our 0x440 with MRCC off does not
-arm MRCC. Then land 2 (and 3) alone on danger-unstable and drive it with the camera armed at
-start: `stock_tja` reads 0 within 1 s of every engagement. Then 1 and 4 together. Fallback if
-the camera ignores a panda-originated frame: 3 becomes a NO_ENTRY and the button stays out.
+active CTS at speed shows nothing on the cluster. Then drive with the camera armed at start:
+`stock_tja` reads 0 within 1 s of every engagement, `mazdaStockCtsActive` never shows. The
+declaration is a toggle, default off, so it lands with the press; declare it only after the
+press is proven. Fallback if the camera ignores a panda-originated frame: 2 becomes a NO_ENTRY
+and the toggle stays off.
 
 Tests: `[0x09d, 2]` in `TX_MSGS`; `test_cam_tja_press` over the eight MADS/cruise/lateral states
-of `test_stock_passthrough`, exact payload accepted only while steering, any other bus-2 button
-bit refused in every state, bit 11 on bus 0 refused with controls allowed; carstate `stock_tja`
-live; carcontroller press cadence, cap, reset and the non-declared path; HUD TJA 2 only under
-the gate; the 09-03 mads A/B trace for non-declared cars.
+of `test_stock_passthrough`, exact payload accepted only while steering, every other bus-2
+button bit refused in every state; `test_tja_button_never_pressed_on_the_car_side`;
+`TestMazdaTjaMads` (both main edges guarded when declared, incl. the PEDALS path under alpha
+long); carstate `TestStockTja` (live, stale, the one-shot pulse) and `TestTjaButtonEvents`;
+`test_mazda_tja_press.py` (press cadence, cap, reset, a lateral pause not resetting, alpha
+long); `test_camera_tja_press_bytes`; the golden tx unchanged; mads `TestMadsTjaButton`;
+`TestMazdaStockCtsEvents` (WARNING only).
 
 ## Constants
 
@@ -446,11 +452,15 @@ the gate; the 09-03 mads A/B trace for non-declared cars.
 - A per-ignition cumulative non-delivery budget: falsified by route 00000031 (6705 frames, no
   fault) and route 148 (faulted on a third of 139's spend).
 - Alerting the moment the latch fires: every rolling manoeuvre becomes a chime.
-- The physical TJA button as the MADS lateral switch (`MazdaTjaButton`, 2026-09-03 to 09-08):
-  the same CRZ_BTNS frame reached the camera, so every press toggled our MADS and the camera's
-  TJA together and their parity was luck (route 00000018: in phase on segs 7-9 and 15, out of
-  phase after seg 12). A forwarded frame cannot be rewritten and dropping it opens a counter
-  gap the camera validates. Back on the MRCC main edge like upstream.
+- The physical TJA button as the MADS lateral switch without owning the camera's state
+  (`MazdaTjaButton`, first attempt, 2026-09-03 to 09-08): the same CRZ_BTNS frame reached the
+  camera, so every press toggled our MADS and the camera's TJA together and their parity was
+  luck (route 00000018: in phase on segs 7-9 and 15, out of phase after seg 12). A forwarded
+  frame cannot be rewritten and dropping it opens a counter gap the camera validates. Rebuilt
+  2026-09-09 on top of the bus-2 camera press (above).
+- Keeping `acc_main_on` on MRCC with the button declared (the 09-09 draft plan): the panda's
+  MADS exits lateral on the acc_main falling edge, so the MRCC master button would have killed
+  the panda's lateral under a still-engaged software MADS. The guard stays.
 - Inferring a panda rejection from the EPS's echo of the last request (`STEER_RATE.LKAS_REQUEST`
   matching none of the recent commands, shipped 2026-09-06 as `recover_from_rejection`): correct
   at the logged timing but latency-bound. The echo lands 10 ms after the command at the median
