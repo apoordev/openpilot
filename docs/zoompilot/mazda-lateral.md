@@ -327,28 +327,47 @@ camera warning at that cadence; it is not in the CAN log.
 
 The camera hears the wheel's TJA press because the panda forwards CRZ_BTNS bus 0 to bus 2, and
 its state persists across our engagements. The fix is to press the button for it, on the
-camera bus only:
+camera bus only. Measured on tja_cts_route_29 (four presses, segs 1 and 9): a press is 2 or 3
+wire frames with bit 11 set (the 10 Hz event frame at the edge, one 30 to 70 ms later, a third
+at ~120 ms), release at 140 to 170 ms, counter +1 on every frame. 0x440 `TJA` changed 21 ms
+after the FIRST set frame every time, from any state (0 to 3, 0 to 2, 2 to 0): the camera acts
+on the press edge and toggles. So the synthetic press is one frame, not a held level; a run of
+100 Hz copies interleaved with the forwarded real frames (bit clear) would read as several
+edges and cancel itself.
 
-1. Carstate reads 0x440 `TJA` from the camera (already parsed) as `stockTjaArmed` (nonzero).
-2. When MADS lateral turns on and the field is nonzero, the carcontroller sends one synthetic
-   CRZ_BTNS on bus 2 with `TJA_BUTTON` set for the stock press length (140 to 170 ms, 14 to 17
-   frames, per tja_cts_route_29), `create_button_cmd` shape with the counter continuing the
-   camera-side sequence, then waits for the field to read 0. Cap at three attempts per
-   engagement; log a `mazdaStockTjaArmed` event if it never clears (no UI, an rlog marker).
-3. Never press on bus 0: the car side must not see a button the driver did not push, and the
-   panda's TX list gains `{MAZDA_CRZ_BTNS, 2, 8}` only, gated on the camera bus and bit 11 alone
-   (all other buttons zero), so the frame can do nothing but toggle the camera.
+1. Carstate reads 0x440 `TJA` from the camera, already parsed on bus 2, as `stock_tja` (live,
+   never latched: seg 9 shows the camera dropping 2 to 0 on its own at +470 ms).
+2. When `latActive` and `stock_tja != 0`, the carcontroller sends ONE CRZ_BTNS on bus 2 with
+   `TJA_BUTTON` set, `CTR = crz_btns_counter + 1`, every other byte the stock idle pattern
+   (`00 09 ff Cx 00 00 00 00`), through `create_button_cmd(bus=2, tja=True)`. The forwarded real
+   stream supplies the release. Then wait at least 1 s (0x440 period 0.563 s plus parser
+   latency) before pressing again; cap at three presses per arming episode, reset when the field
+   reads 0, so a driver re-arming it under us is handled again. `cloudlog` the third failure;
+   no UI.
+3. Never press on bus 0: the tx hook refuses bit 11 on bus 0 outright, and accepts the bus 2
+   frame only while `mazda_openpilot_controlling()` and byte-exact (bit 11 and the idle pattern,
+   no other button), so openpilot cannot switch the driver's stock CTS off while disengaged.
+   Panda entry `{MAZDA_CRZ_BTNS, MAZDA_CAM, 8, .check_relay = false}` in both TX lists: with
+   check_relay off it is skipped by both the relay watchdog and static forward blocking, so the
+   wheel's 0x09d keeps forwarding to the camera unchanged. Fwd hook untouched.
 4. Do not restore the camera's state on disengage. Disengaged the camera owns the addresses and
    the driver can arm it with the real button; re-arming it for them would hand stock CTS the
    wheel the moment MADS pauses.
 
-Validation before it ships: the CX-9 (physical button, CTS bit set) on the bench with the
-engine running, confirm a bus-2-only press flips 0x440 `TJA` and that the wheel-side 0x9d
-counter/checksum is untouched; then one drive with the camera armed at start, checking the
-field reads 0 within a second of every engagement and the cluster's CTS icon goes off. Fail
-condition: the camera ignores the synthetic frame (checksum, counter, or it reads the button
-from the body side), in which case the fallback is the reverted `stockLkas` alert (opendbc
-6f7a570eeb) as a NO_ENTRY until the driver presses the button themselves.
+Tests: `[0x09d, 2]` joins `TX_MSGS` in test_mazda.py; a `test_cam_tja_press` runs the eight
+MADS/cruise/lateral states of `test_stock_passthrough`, accepting the exact payload only while
+openpilot steers, refusing any other bus-2 button bit in every state and bit 11 on bus 0 with
+controls allowed.
+
+Bench before it ships, CX-9 (physical button, CTS bit set), engine running: does the camera act
+on a panda-originated bus-2 frame at all (route 29 was relay-open, route 00000018 proves only
+forwarded frames); does it accept the duplicated counter (ours at n+1, the next real frame at
+n+1 too), and if not, two frames 30 to 70 ms apart at n+1, n+2; does toggling an active CTS at
+speed chime or show anything on the cluster. Then one drive with the camera armed at start: the
+field reads 0 within a second of every engagement and the CTS icon goes off. If the camera
+ignores the synthetic frame, the fallback is the reverted `stockLkas` alert (opendbc 6f7a570eeb)
+as a NO_ENTRY until the driver presses the button themselves; a stateful fwd block of 0x09d for
+a few frames after our tx is the last resort, since the fwd hook cannot see frame data.
 
 ## Constants
 
