@@ -105,7 +105,8 @@ class SettingsLayoutSP(OP.SettingsLayout):
 
     def _set_offroad_status(status: bool):
       if not ui_state.engaged:
-        ui_state.params.put_bool("OffroadMode", status)
+        # entering is brokered by hardwared so a silenced stock ECU is handed back first
+        ui_state.params.put_bool("OffroadModeRequested" if status else "OffroadMode", status)
         ui_state.always_offroad = status
 
     if not enable:

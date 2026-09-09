@@ -170,13 +170,18 @@ class DeviceLayoutSP(DeviceLayout):
       gui_app.push_widget(alert_dialog(tr("Disengage to Enter Always Offroad Mode")))
       return
 
-    _offroad_mode_state = ui_state.params.get_bool("OffroadMode")
+    _offroad_mode_state = ui_state.params.get_bool("OffroadMode") or ui_state.params.get_bool("OffroadModeRequested")
     _offroad_mode_str = tr("Are you sure you want to exit Always Offroad mode?") if _offroad_mode_state else \
                         tr("Are you sure you want to enter Always Offroad mode?")
 
     def _set_always_offroad(result: int):
       if result == DialogResult.CONFIRM and not ui_state.engaged:
-        ui_state.params.put_bool("OffroadMode", not _offroad_mode_state)
+        # entering is brokered by hardwared so a silenced stock ECU is handed back first
+        if _offroad_mode_state:
+          ui_state.params.put_bool("OffroadMode", False)
+          ui_state.params.put_bool("OffroadModeRequested", False)
+        else:
+          ui_state.params.put_bool("OffroadModeRequested", True)
 
     gui_app.push_widget(ConfirmDialog(_offroad_mode_str, tr("Confirm"), callback=lambda result: _set_always_offroad(result)))
 
@@ -190,7 +195,7 @@ class DeviceLayoutSP(DeviceLayout):
     super()._update_state()
 
     # Handle Always Offroad button
-    always_offroad = ui_state.params.get_bool("OffroadMode")
+    always_offroad = ui_state.params.get_bool("OffroadMode") or ui_state.params.get_bool("OffroadModeRequested")
 
     # Text & Color
     offroad_mode_btn_text = tr("Exit Always Offroad") if always_offroad else tr("Enable Always Offroad")

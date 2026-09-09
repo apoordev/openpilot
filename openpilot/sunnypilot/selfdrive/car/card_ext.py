@@ -17,11 +17,13 @@ class CardExt:
   one published. sm is card's SubMaster, already updated this frame.
   """
 
-  def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP, params: Params, sm, v_cruise_helper) -> None:
+  def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP, params: Params, sm, v_cruise_helper, CI) -> None:
     self.sm = sm
     self.v_cruise_helper = v_cruise_helper
     # onroad AlphaLongitudinalEnabled changes: sequence any ECU hand-back, then cycle
     self.alpha_long_monitor = AlphaLongToggleMonitor(CP, params)
+    # Controller state stays inside card; it is not inferred from a driver-facing fault bit.
+    self.radar_session = CI.CC.radar_session if CP.brand == "mazda" and CP.openpilotLongitudinalControl else None
 
   def update_v_cruise_post(self, CS, CS_SP) -> None:
     helper = self.v_cruise_helper
@@ -34,7 +36,9 @@ class CardExt:
   def controls_update(self, CS, CC, CC_SP: structs.CarControlSP) -> structs.CarControlSP:
     """Runs just before CI.apply on the converted CarControlSP struct, which it may edit."""
     self.v_cruise_helper.cruise_arbiter.gate_send_button(CC_SP)
-    self.alpha_long_monitor.update(CS, CC, CC_SP)
+    self.alpha_long_monitor.update(CS, CC, CC_SP,
+                                   stock_ecu_restored=self.radar_session is not None and self.radar_session.handback_completed,
+                                   stock_ecu_restore_failed=self.radar_session is not None and self.radar_session.handback_failed)
     return CC_SP
 
   def update_params(self) -> None:
