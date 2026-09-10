@@ -6,30 +6,8 @@ See the LICENSE.md file in the root directory for more details.
 """
 from openpilot.common.params import ParamKeyFlag
 from openpilot.sunnypilot.selfdrive.car.stock_ecu_handback import HANDBACK_WAIT_T
+from openpilot.sunnypilot.selfdrive.car.tests.fakes import FakeClock, FakeParams
 from openpilot.sunnypilot.system.hardware.hardwared_ext import HardwaredExt
-
-
-class FakeParams:
-  def __init__(self, **bools):
-    self.bools = dict(bools)
-    self.cleared: list[ParamKeyFlag] = []
-
-  def get_bool(self, key):
-    return self.bools.get(key, False)
-
-  def put_bool(self, key, value, block=False):
-    self.bools[key] = value
-
-  def clear_all(self, flag):
-    self.cleared.append(flag)
-
-
-class FakeClock:
-  def __init__(self):
-    self.t = 0.0
-
-  def __call__(self):
-    return self.t
 
 
 def _ext(**bools):

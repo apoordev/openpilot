@@ -9,19 +9,17 @@ from openpilot.sunnypilot.selfdrive.car.alpha_long_toggle import AlphaLongToggle
   STANDSTILL_V, STANDSTILL_T, StandstillGate
 
 from opendbc.car.mazda.radar_session import RADAR_SESSION_LIMIT_FRAMES
+from openpilot.sunnypilot.selfdrive.car.tests.fakes import FakeParams
 
 MOVING_V = 12.0
 
 
-class FakeParams:
-  def __init__(self, **bools):
-    self.bools = dict(bools)
+class FakeSession:
+  """The interface's radar session manager as the monitor sees it."""
 
-  def get_bool(self, key):
-    return self.bools.get(key, False)
-
-  def put_bool(self, key, value, **kwargs):
-    self.bools[key] = value
+  def __init__(self):
+    self.handback_completed = False
+    self.handback_failed = False
 
 
 def _monitor(toggle: bool, brand="mazda", op_long=True, alpha_avail=True, cycle_attempted=False, parked=True):
@@ -30,7 +28,9 @@ def _monitor(toggle: bool, brand="mazda", op_long=True, alpha_avail=True, cycle_
   cp.openpilotLongitudinalControl = op_long
   cp.alphaLongitudinalAvailable = alpha_avail
   params = FakeParams(AlphaLongitudinalEnabled=toggle, AlphaLongCycleAttempted=cycle_attempted)
-  m = AlphaLongToggleMonitor(cp, params)
+  # card_ext hands the session over only on a platform that silences a stock ECU under op long
+  session = FakeSession() if brand == "mazda" and op_long else None
+  m = AlphaLongToggleMonitor(cp, params, session)
   m.update_params()
   if parked:
     # the car has been sitting still since card started; the standstill debounce is already satisfied
@@ -39,6 +39,9 @@ def _monitor(toggle: bool, brand="mazda", op_long=True, alpha_avail=True, cycle_
 
 
 def _step(monitor, restored=False, restore_failed=False, acc_faulted=False, enabled=False, v_ego=0.0, can_valid=True):
+  if monitor.session is not None:
+    monitor.session.handback_completed = restored
+    monitor.session.handback_failed = restore_failed
   cs = structs.CarState()
   cs.canValid = can_valid
   cs.accFaulted = acc_faulted
@@ -46,7 +49,7 @@ def _step(monitor, restored=False, restore_failed=False, acc_faulted=False, enab
   cc = structs.CarControl()
   cc.enabled = enabled
   cc_sp = structs.CarControlSP()
-  monitor.update(cs, cc, cc_sp, stock_ecu_restored=restored, stock_ecu_restore_failed=restore_failed)
+  monitor.update(cs, cc, cc_sp)
   return cc_sp
 
 

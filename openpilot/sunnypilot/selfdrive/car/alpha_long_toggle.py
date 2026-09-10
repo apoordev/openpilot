@@ -57,11 +57,15 @@ class StandstillGate:
 
 
 class AlphaLongToggleMonitor:
-  def __init__(self, CP: structs.CarParams, params: Params):
-    self.CP = CP
+  def __init__(self, CP: structs.CarParams, params: Params, stock_ecu_session=None):
+    """stock_ecu_session: the interface's session manager (handback_completed / handback_failed)
+    when this platform silences a stock ECU under openpilot longitudinal, else None."""
     self.params = params
-    self.toggle_enabled = CP.openpilotLongitudinalControl
-    self.handback_frames = 0
+    self.session = stock_ecu_session
+    self.op_long = CP.openpilotLongitudinalControl
+    self.alpha_available = CP.alphaLongitudinalAvailable
+    self.toggle_enabled = self.op_long
+    self.handback_started = False
     self.done = False
     self.repeat_logged = False
     self.restore_failure_logged = False
@@ -73,7 +77,7 @@ class AlphaLongToggleMonitor:
     # cycle, so a mismatch that survives the restart would otherwise cycle forever. Read
     # once; request_cycle is the only writer and it latches done.
     self.cycle_attempted = params.get_bool("AlphaLongCycleAttempted")
-    if self.cycle_attempted and params.get_bool("AlphaLongitudinalEnabled") == CP.openpilotLongitudinalControl:
+    if self.cycle_attempted and params.get_bool("AlphaLongitudinalEnabled") == self.op_long:
       # the cycle took; a later flip this ignition is a new request, not a persisting one
       params.put_bool("AlphaLongCycleAttempted", False)
       self.cycle_attempted = False
@@ -81,28 +85,35 @@ class AlphaLongToggleMonitor:
   def update_params(self) -> None:
     # called from card's 10 Hz params thread
     self.toggle_enabled = self.params.get_bool("AlphaLongitudinalEnabled")
-    self.handback_requested |= self.params.get_bool("StockEcuHandBackRequested")
+    if not self.handback_requested:
+      self.handback_requested = self.params.get_bool("StockEcuHandBackRequested")
 
   def request_cycle(self) -> None:
     self.params.put_bool("AlphaLongCycleAttempted", True)
     self.params.put_bool("OnroadCycleRequested", True)
     self.done = True
 
-  def update(self, CS: structs.CarState, CC: structs.CarControl, CC_SP: structs.CarControlSP, *,
-             stock_ecu_restored: bool = False, stock_ecu_restore_failed: bool = False) -> None:
+  @property
+  def restored(self) -> bool:
+    return self.session is not None and self.session.handback_completed
+
+  @property
+  def restore_failed(self) -> bool:
+    return self.session is not None and self.session.handback_failed
+
+  def update(self, CS: structs.CarState, CC: structs.CarControl, CC_SP: structs.CarControlSP) -> None:
     """Runs at 100 Hz from controls_update, before CI.apply."""
-    # tracked every frame so a flip made while parked is acted on at once
-    # Do not treat the last zero speed before a CAN outage as a parked vehicle.
-    speed_valid = self.CP.brand != "mazda" or (CS.canValid and not CS.canTimeout)
-    stopped = self.standstill.update(CS.vEgo if speed_valid else float("inf"))
-    self._serve_external_stop(CC, CC_SP, stock_ecu_restored, stock_ecu_restore_failed)
+    # tracked every frame so a flip made while parked is acted on at once; the last zero
+    # speed before a CAN outage is not a parked vehicle
+    stopped = self.standstill.update(CS.vEgo if CS.canValid and not CS.canTimeout else float("inf"))
+    self._serve_external_stop(CC, CC_SP)
     # Keep hand-back asserted once started because CC_SP is rebuilt each frame and the session
     # manager treats a cleared request as a new takeover.
-    if self.handback_frames > 0:
+    if self.handback_started:
       CC_SP.stockEcuHandBack = True
     if self.done:
       return
-    toggle_mismatch = self.CP.alphaLongitudinalAvailable and self.toggle_enabled != self.CP.openpilotLongitudinalControl
+    toggle_mismatch = self.alpha_available and self.toggle_enabled != self.op_long
     if toggle_mismatch and self.cycle_attempted:
       if not self.repeat_logged:
         cloudlog.warning("alpha long toggle mismatch persists after this ignition's onroad cycle, not cycling again")
@@ -113,43 +124,40 @@ class AlphaLongToggleMonitor:
 
     # Wait for disengagement and standstill because parameters can change outside the UI.
     # Once started, hand-back remains asserted while the final cycle waits.
-    if self.CP.brand != "mazda" or not self.CP.openpilotLongitudinalControl:
+    if self.session is None:
       # No ECU hand-back is required when enabling or on unaffected platforms.
       if not CC.enabled and stopped:
         self.request_cycle()
       return
 
-    if self.handback_frames == 0 and (CC.enabled or not stopped):
+    if not self.handback_started and (CC.enabled or not stopped):
       return
 
     self.toggle_handback = True
-    self._assert_handback(CC_SP)
+    self.handback_started = True
+    CC_SP.stockEcuHandBack = True
     # A reversed toggle still finishes the outstanding restoration, then rebuilds the
     # interface with the latest setting. Never alternate diagnostic sessions mid-handback.
-    if stock_ecu_restore_failed and not self.restore_failure_logged:
+    if self.restore_failed and not self.restore_failure_logged:
       cloudlog.error("Mazda radar restoration failed; waiting for stock traffic before cycling")
       self.restore_failure_logged = True
-    if stock_ecu_restored and not CC.enabled and stopped:
+    if self.restored and not CC.enabled and stopped:
       self.request_cycle()
 
-  def _assert_handback(self, CC_SP: structs.CarControlSP) -> None:
-    CC_SP.stockEcuHandBack = True
-    self.handback_frames += 1
-
-  def _serve_external_stop(self, CC: structs.CarControl, CC_SP: structs.CarControlSP,
-                           stock_ecu_restored: bool, stock_ecu_restore_failed: bool) -> None:
+  def _serve_external_stop(self, CC: structs.CarControl, CC_SP: structs.CarControlSP) -> None:
     if not self.handback_requested or self.handback_answered:
       return
-    if self.CP.brand != "mazda" or not self.CP.openpilotLongitudinalControl:
+    if self.session is None:
       self._answer_external_stop()
       return
     # Never start on an engaged car: the hand-back revokes availability under the driver.
     # Once started (by either path) it runs to its end.
-    if self.handback_frames == 0 and CC.enabled:
+    if not self.handback_started and CC.enabled:
       return
-    self._assert_handback(CC_SP)
-    if stock_ecu_restored or stock_ecu_restore_failed:
-      if stock_ecu_restore_failed:
+    self.handback_started = True
+    CC_SP.stockEcuHandBack = True
+    if self.restored or self.restore_failed:
+      if self.restore_failed:
         cloudlog.error("Mazda radar restoration failed before the requested stop; stopping anyway")
       self._answer_external_stop()
 

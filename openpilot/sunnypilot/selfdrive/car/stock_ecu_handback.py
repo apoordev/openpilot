@@ -37,7 +37,8 @@ class StockEcuHandBackGate:
     return self.requested_ts is not None
 
   def ready(self, started: bool) -> bool:
-    """True when the caller may end the onroad state now. Call every loop while the stop is wanted."""
+    """True when the caller may end the onroad state now; the wait is cleared with it.
+    Call every loop while the stop is wanted, reset() if it is withdrawn."""
     if not started:
       self.requested_ts = None
       return True
@@ -47,9 +48,11 @@ class StockEcuHandBackGate:
       cloudlog.warning("stock ECU hand-back requested before ending onroad")
       return False
     if self.params.get_bool("StockEcuHandBackDone"):
+      self.requested_ts = None
       return True
     if self.now() - self.requested_ts > HANDBACK_WAIT_T:
       cloudlog.error("stock ECU hand-back did not complete in time, ending onroad anyway")
+      self.requested_ts = None
       return True
     return False
 

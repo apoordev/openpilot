@@ -5,23 +5,13 @@ This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 from openpilot.sunnypilot.selfdrive.car.stock_ecu_handback import HANDBACK_WAIT_T, StockEcuHandBackGate
-
-
-class FakeParams:
-  def __init__(self, **bools):
-    self.bools = dict(bools)
-
-  def get_bool(self, key):
-    return self.bools.get(key, False)
-
-  def put_bool(self, key, value, **kwargs):
-    self.bools[key] = value
+from openpilot.sunnypilot.selfdrive.car.tests.fakes import FakeClock, FakeParams
 
 
 def _gate(**bools):
   params = FakeParams(**bools)
-  clock = {"t": 0.0}
-  gate = StockEcuHandBackGate(params, now=lambda: clock["t"])
+  clock = FakeClock()
+  gate = StockEcuHandBackGate(params, now=clock)
   return gate, params, clock
 
 
@@ -43,9 +33,9 @@ class TestStockEcuHandBackGate:
   def test_wait_is_bounded(self):
     gate, params, clock = _gate()
     assert not gate.ready(started=True)
-    clock["t"] = HANDBACK_WAIT_T - 0.1
+    clock.t = HANDBACK_WAIT_T - 0.1
     assert not gate.ready(started=True)
-    clock["t"] = HANDBACK_WAIT_T + 0.1
+    clock.t = HANDBACK_WAIT_T + 0.1
     assert gate.ready(started=True)
 
   def test_going_offroad_mid_wait_releases(self):

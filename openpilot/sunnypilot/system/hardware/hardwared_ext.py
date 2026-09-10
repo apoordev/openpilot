@@ -32,7 +32,6 @@ class HardwaredExt:
       return False
     if not self.handback.ready(started):
       return False
-    self.handback.reset()
     if offroad:
       self.params.put_bool("OffroadModeRequested", False, block=True)
       self.params.put_bool("OffroadMode", True, block=True)
